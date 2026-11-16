@@ -1,7 +1,7 @@
 services:
   mail-harbor:
     build: .
-    image: mail-harbor:local
+    image: stylle/mail-harbor:v0.2.0
     ports: ["28187:8080"]
     volumes: ["mail-harbor-data:/data"]
     restart: unless-stopped
