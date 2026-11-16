@@ -26,8 +26,16 @@ import (
 
 var providerHosts = map[string]string{"qq": "imap.qq.com:993", "163": "imap.163.com:993", "gmail": "imap.gmail.com:993"}
 var imapDial = func(ctx context.Context, host string) (net.Conn, error) {
-	dial := tls.Dialer{NetDialer: &net.Dialer{Timeout: 12 * time.Second}, Config: &tls.Config{MinVersion: tls.VersionTLS12, ServerName: strings.Split(host, ":")[0]}}
-	return dial.DialContext(ctx, "tcp", host)
+	conn, e := dialProxy(ctx, host)
+	if e != nil {
+		return nil, e
+	}
+	tlsConn := tls.Client(conn, &tls.Config{MinVersion: tls.VersionTLS12, ServerName: strings.Split(host, ":")[0]})
+	if e = tlsConn.HandshakeContext(ctx); e != nil {
+		conn.Close()
+		return nil, e
+	}
+	return tlsConn, nil
 }
 
 const maxMailBytes = 20 << 20
@@ -237,13 +245,20 @@ func imapDetail(ctx context.Context, a Account, secret string, m Message) (fetch
 	return parseMail(raw)
 }
 func plainHTML(s string) string {
+	truncated := len(s) > 2<<20
+	if truncated {
+		s = s[:2<<20]
+	}
 	root, e := html.Parse(strings.NewReader(s))
 	if e != nil {
 		return ""
 	}
 	var b strings.Builder
-	var visit func(*html.Node)
-	visit = func(n *html.Node) {
+	var visit func(*html.Node, int)
+	visit = func(n *html.Node, depth int) {
+		if depth > 512 || b.Len() > 1<<20 {
+			return
+		}
 		if n.Type == html.ElementNode && (n.Data == "script" || n.Data == "style" || n.Data == "head") {
 			return
 		}
@@ -253,11 +268,34 @@ func plainHTML(s string) string {
 		if n.Type == html.ElementNode && (n.Data == "br" || n.Data == "p" || n.Data == "div" || n.Data == "tr") {
 			b.WriteByte('\n')
 		}
+		start := b.Len()
 		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			visit(c)
+			visit(c, depth+1)
+		}
+		if n.Type == html.ElementNode && n.Data == "a" {
+			for _, attr := range n.Attr {
+				if attr.Key != "href" {
+					continue
+				}
+				raw := strings.TrimSpace(attr.Val)
+				u, err := url.Parse(raw)
+				if err != nil || u.User != nil || len(raw) > 8000 {
+					break
+				}
+				scheme := strings.ToLower(u.Scheme)
+				allowed := (scheme == "https" || scheme == "http") && u.Host != ""
+				allowed = allowed || ((scheme == "mailto" || scheme == "tel") && u.Opaque != "")
+				if allowed && !strings.Contains(b.String()[start:], raw) {
+					b.WriteString(" (" + raw + ")")
+				}
+				break
+			}
 		}
 	}
-	visit(root)
+	visit(root, 0)
+	if truncated {
+		b.WriteString("\n[Content truncated / 正文已截断]")
+	}
 	return strings.TrimSpace(b.String())
 }
 func parseMail(raw []byte) (fetchedMail, error) {
@@ -322,7 +360,7 @@ func formJSON(ctx context.Context, endpoint string, values url.Values, out any) 
 		return e
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	resp, e := externalHTTP.Do(req)
+	resp, e := requestHTTP(ctx).Do(req)
 	if e != nil {
 		return errors.New("授权服务器不可达，请检查部署网络")
 	}
@@ -345,7 +383,7 @@ func refreshMS(ctx context.Context, a Account, secret string) (msTokens, error) 
 	}
 	old := tok.Refresh
 	var next msTokens
-	e := formJSON(ctx, msBase+"token", url.Values{"client_id": {a.ClientID}, "grant_type": {"refresh_token"}, "refresh_token": {old}, "scope": {"offline_access https://graph.microsoft.com/Mail.Read https://graph.microsoft.com/User.Read"}}, &next)
+	e := formJSON(ctx, msBase+"token", url.Values{"client_id": {a.ClientID}, "grant_type": {"refresh_token"}, "refresh_token": {old}}, &next)
 	if e != nil {
 		return tok, e
 	}
@@ -366,7 +404,7 @@ func graphGet(ctx context.Context, token, endpoint string, out any) error {
 	req, _ := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Prefer", `outlook.body-content-type="text", IdType="ImmutableId"`)
-	resp, e := externalHTTP.Do(req)
+	resp, e := requestHTTP(ctx).Do(req)
 	if e != nil {
 		return errors.New("无法连接Microsoft Graph")
 	}

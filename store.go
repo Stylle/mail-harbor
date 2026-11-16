@@ -19,7 +19,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const version = "0.1.0"
+const version = "0.2.0"
 const maxMessages = 5000
 
 type Account struct {
@@ -38,6 +38,7 @@ type Account struct {
 	LastSync    int64  `json:"lastSync"`
 	LastError   string `json:"lastError"`
 	Generation  string `json:"generation"`
+	Proxy       string `json:"proxy,omitempty"`
 }
 type Message struct {
 	ID          string `json:"id"`
@@ -61,17 +62,24 @@ type Channels struct {
 	WebhookEnabled  bool   `json:"webhookEnabled"`
 	WebhookURL      string `json:"webhookUrl"`
 	WebhookSecret   string `json:"webhookSecret,omitempty"`
+	WebhookHeaders  string `json:"webhookHeaders,omitempty"`
+	WebhookBody     string `json:"webhookBody"`
+	WebhookMethod   string `json:"webhookMethod"`
+	WebhookBodyType string `json:"webhookBodyType"`
 }
 type Rule struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Enabled   bool   `json:"enabled"`
-	AccountID string `json:"accountId"`
-	Sender    string `json:"sender"`
-	Keyword   string `json:"keyword"`
-	Mode      string `json:"mode"`
-	Telegram  bool   `json:"telegram"`
-	Webhook   bool   `json:"webhook"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Enabled     bool   `json:"enabled"`
+	AccountID   string `json:"accountId"`
+	Sender      string `json:"sender"`
+	Keyword     string `json:"keyword"`
+	Mode        string `json:"mode"`
+	Telegram    bool   `json:"telegram"`
+	Webhook     bool   `json:"webhook"`
+	FilterMode  string `json:"filterMode"`
+	SenderList  string `json:"senderList"`
+	KeywordList string `json:"keywordList"`
 }
 type Job struct {
 	ID        string `json:"id"`
@@ -82,6 +90,7 @@ type Job struct {
 	Attempts  int    `json:"attempts"`
 	Next      int64  `json:"next"`
 	Done      bool   `json:"done"`
+	Canceled  bool   `json:"canceled,omitempty"`
 	Error     string `json:"error"`
 }
 type Event struct {
@@ -90,16 +99,22 @@ type Event struct {
 	Text string `json:"text"`
 }
 type State struct {
-	Version  int       `json:"version"`
-	Revision int64     `json:"revision"`
-	Username string    `json:"username"`
-	Password string    `json:"password"`
-	Accounts []Account `json:"accounts"`
-	Messages []Message `json:"messages"`
-	Channels Channels  `json:"channels"`
-	Rules    []Rule    `json:"rules"`
-	Jobs     []Job     `json:"jobs"`
-	Events   []Event   `json:"events"`
+	Version        int          `json:"version"`
+	Revision       int64        `json:"revision"`
+	Username       string       `json:"username"`
+	Password       string       `json:"password"`
+	PasswordPolicy int          `json:"passwordPolicy"`
+	AuthEpoch      string       `json:"authEpoch"`
+	TOTPSecret     string       `json:"totpSecret,omitempty"`
+	TOTPLast       int64        `json:"totpLast"`
+	Recovery       []string     `json:"recovery,omitempty"`
+	Sent           []SendRecord `json:"sent,omitempty"`
+	Accounts       []Account    `json:"accounts"`
+	Messages       []Message    `json:"messages"`
+	Channels       Channels     `json:"channels"`
+	Rules          []Rule       `json:"rules"`
+	Jobs           []Job        `json:"jobs"`
+	Events         []Event      `json:"events"`
 }
 type Store struct {
 	mu    sync.Mutex
@@ -216,7 +231,7 @@ func openStore(dir string) (*Store, error) {
 	if e = os.Chmod(filepath.Join(dir, "mail-harbor.db"), 0600); e != nil {
 		return nil, e
 	}
-	s := &Store{db: db, key: key, state: State{Version: 1, Accounts: []Account{}, Messages: []Message{}, Rules: []Rule{}, Jobs: []Job{}, Events: []Event{}}}
+	s := &Store{db: db, key: key, state: State{Version: 2, Accounts: []Account{}, Messages: []Message{}, Rules: []Rule{}, Jobs: []Job{}, Events: []Event{}}}
 	var b []byte
 	e = db.QueryRow("SELECT payload FROM state WHERE id=1").Scan(&b)
 	if e == sql.ErrNoRows {
@@ -227,12 +242,18 @@ func openStore(dir string) (*Store, error) {
 	if e != nil {
 		return nil, e
 	}
-	if s.state.Version != 1 {
+	if s.state.Version != 1 && s.state.Version != 2 {
 		return nil, errors.New("unsupported database version")
 	}
 	for _, a := range s.state.Accounts {
 		if _, e = s.decrypt(a.Secret); e != nil {
 			return nil, errors.New("account credentials cannot be decrypted; master.key does not match database")
+		}
+	}
+	if s.state.Version == 1 {
+		s.state.Version = 2
+		if e = s.persist(s.state); e != nil {
+			return nil, e
 		}
 	}
 	opened = true
@@ -245,6 +266,12 @@ func cloneState(st State) State {
 	return out
 }
 func (s *Store) snapshot() State { s.mu.Lock(); defer s.mu.Unlock(); return cloneState(s.state) }
+func (s *Store) authState() State {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st := s.state
+	return State{Username: st.Username, Password: st.Password, PasswordPolicy: st.PasswordPolicy, AuthEpoch: st.AuthEpoch, TOTPSecret: st.TOTPSecret, TOTPLast: st.TOTPLast, Recovery: append([]string{}, st.Recovery...)}
+}
 func (s *Store) persist(st State) error {
 	b, e := json.Marshal(st)
 	if e != nil {

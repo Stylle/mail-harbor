@@ -34,8 +34,11 @@ import (
 var webFS embed.FS
 
 type session struct {
-	CSRF  string
-	Until int64
+	CSRF     string
+	Until    int64
+	Full     bool
+	ReEnroll bool
+	Epoch    string
 }
 type deviceGrant struct {
 	AccountID, Generation, Code, ClientID, Session string
@@ -47,12 +50,13 @@ type loginLimit struct {
 	Start int64
 }
 type App struct {
-	store    *Store
-	engine   *Engine
-	mu       sync.Mutex
-	sessions map[string]session
-	limits   map[string]loginLimit
-	grants   map[string]deviceGrant
+	store       *Store
+	engine      *Engine
+	mu          sync.Mutex
+	sessions    map[string]session
+	limits      map[string]loginLimit
+	grants      map[string]deviceGrant
+	enrollments map[string]enrollment
 }
 
 func main() {
@@ -66,8 +70,8 @@ func main() {
 	}
 	defer s.db.Close()
 	if initial := os.Getenv("PASSWORD"); s.snapshot().Password == "" && initial != "" {
-		if len(initial) < 12 || len(initial) > 256 {
-			log.Fatal("Initial PASSWORD must contain 12 to 256 characters")
+		if !strongPassword(initial) {
+			log.Fatal("Initial PASSWORD requires 12+ characters, uppercase, lowercase, a number and a symbol")
 		}
 		name := os.Getenv("USER")
 		if name == "" {
@@ -79,6 +83,8 @@ func main() {
 		if err = s.update(func(st *State) error {
 			st.Username = name
 			st.Password = passwordHash(initial)
+			st.PasswordPolicy = 1
+			st.AuthEpoch = randomID()
 			event(st, "setup", "管理账户已创建")
 			return nil
 		}); err != nil {
@@ -152,12 +158,13 @@ func (a *App) auth(r *http.Request) (session, string, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	s, ok := a.sessions[key]
-	return s, key, ok && s.Until > time.Now().Unix()
+	return s, key, ok && s.Until > time.Now().Unix() && s.Epoch == a.store.authState().AuthEpoch
 }
 func (a *App) clearSessions() {
 	a.mu.Lock()
 	a.sessions = map[string]session{}
 	a.grants = map[string]deviceGrant{}
+	a.enrollments = map[string]enrollment{}
 	a.mu.Unlock()
 }
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -170,6 +177,9 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !strings.HasPrefix(r.URL.Path, "/api/") {
+		if r.URL.Path == "/" || r.URL.Path == "/index.html" {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
 		if r.Method != "GET" && r.Method != "HEAD" {
 			http.NotFound(w, r)
 			return
@@ -191,8 +201,8 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/api/session" && r.Method == "GET" {
 		s, _, ok := a.auth(r)
-		st := a.store.snapshot()
-		data := map[string]any{"configured": st.Password != "", "authenticated": ok, "version": version}
+		st := a.store.authState()
+		data := map[string]any{"configured": st.Password != "", "authenticated": ok && s.Full && st.TOTPSecret != "" && st.PasswordPolicy >= 1, "needsTwoFactorSetup": ok && !s.Full, "needsPasswordChange": ok && st.PasswordPolicy < 1, "twoFactorRequired": st.TOTPSecret != "", "version": version}
 		if ok {
 			data["csrf"] = s.CSRF
 			data["username"] = st.Username
@@ -226,6 +236,33 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			fail(w, 409, "系统正在恢复备份，请稍后再试")
 			return
 		}
+		if r.URL.Path == "/api/security" || strings.HasPrefix(r.URL.Path, "/api/2fa/") {
+			a.mu.Lock()
+			bucket := a.limits["security:"+key]
+			now := time.Now().Unix()
+			if now-bucket.Start > 600 {
+				bucket = loginLimit{Start: now}
+			}
+			bucket.Count++
+			a.limits["security:"+key] = bucket
+			a.mu.Unlock()
+			if bucket.Count > 20 {
+				fail(w, 429, "安全操作过于频繁，请10分钟后重试")
+				return
+			}
+		}
+	}
+	if r.Method == "POST" && r.URL.Path == "/api/2fa/begin" {
+		a.beginEnrollment(w, r, key, s)
+		return
+	}
+	if r.Method == "POST" && r.URL.Path == "/api/2fa/confirm" {
+		a.confirmEnrollment(w, r, key)
+		return
+	}
+	if (!s.Full || a.store.authState().TOTPSecret == "" || a.store.authState().PasswordPolicy < 1) && r.URL.Path != "/api/logout" {
+		fail(w, 403, "请先完成强制双重验证设置")
+		return
 	}
 	switch r.Method + " " + r.URL.Path {
 	case "POST /api/logout":
@@ -236,6 +273,8 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		jsonOut(w, 200, map[string]bool{"ok": true})
 	case "GET /api/state":
 		a.publicState(w)
+	case "POST /api/send":
+		a.sendMail(w, r)
 	case "POST /api/account":
 		a.saveAccount(w, r)
 	case "POST /api/account/test":
@@ -301,15 +340,17 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(w, 404, "接口不存在")
 	}
 }
+func trustProxy() bool { return os.Getenv("TRUST_PROXY") == "1" }
 func (a *App) login(w http.ResponseWriter, r *http.Request, setup bool) {
 	var v struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
+		Code     string `json:"code"`
 	}
 	if !decode(w, r, &v) {
 		return
 	}
-	if len(v.Username) > 64 || len(v.Password) > 256 {
+	if len(v.Username) > 64 || len(v.Password) > 256 || len(v.Code) > 100 {
 		fail(w, 400, "账号或密码长度超出限制")
 		return
 	}
@@ -332,59 +373,63 @@ func (a *App) login(w http.ResponseWriter, r *http.Request, setup bool) {
 				delete(a.limits, k)
 			}
 		}
+		if _, exists := a.limits[ip]; !exists && len(a.limits) >= 2000 {
+			a.mu.Unlock()
+			fail(w, 429, "尝试次数过多，请稍后重试")
+			return
+		}
 	}
 	a.limits[ip] = limit
 	a.mu.Unlock()
-	st := a.store.snapshot()
+	st := a.store.authState()
 	if setup {
 		if st.Password != "" {
 			fail(w, 409, "管理账户已创建")
 			return
 		}
-		if len(v.Password) < 12 || len(v.Password) > 256 || len(v.Username) < 1 || len(v.Username) > 64 {
-			fail(w, 400, "用户名1～64个字符，密码至少12个字符")
+		if !strongPassword(v.Password) || len(v.Username) < 1 {
+			fail(w, 400, passwordRequirement)
 			return
 		}
 		hash := passwordHash(v.Password)
-		if err := a.store.update(func(st *State) error {
-			if st.Password != "" {
-				return errors.New("管理账户已创建")
+		if err := a.store.update(func(next *State) error {
+			if next.Password != "" {
+				return errors.New("already configured")
 			}
-			st.Username = v.Username
-			st.Password = hash
-			event(st, "setup", "管理账户已创建")
+			next.Username = v.Username
+			next.Password = hash
+			next.PasswordPolicy = 1
+			next.AuthEpoch = randomID()
+			event(next, "setup", "管理账户已创建，等待绑定验证器")
 			return nil
 		}); err != nil {
 			fail(w, 409, "账户创建失败，请刷新重试")
 			return
 		}
-		st.Password = hash
-	} else if st.Password == "" || v.Username != st.Username || !passwordOK(st.Password, v.Password) {
+		a.issueSession(w, r, false, false, a.store.authState())
+		return
+	}
+	if st.Password == "" || v.Username != st.Username || !passwordOK(st.Password, v.Password) {
 		fail(w, 401, "账号或密码不正确")
 		return
 	}
-	token := randomID()
-	s := session{CSRF: randomID(), Until: now + 7*86400}
-	a.mu.Lock()
-	if a.store.snapshot().Password != st.Password {
-		a.mu.Unlock()
+	recovery := false
+	if st.TOTPSecret != "" {
+		valid, usedRecovery := a.consumeSecondFactor(st, v.Code, true)
+		if !valid {
+			fail(w, 401, "验证码不正确或已使用，请等待下一组验证码")
+			return
+		}
+		recovery = usedRecovery
+	}
+	if a.store.authState().Password != st.Password {
 		fail(w, 401, "管理账户已改变，请重新登录")
 		return
 	}
-	for k, old := range a.sessions {
-		if old.Until < now {
-			delete(a.sessions, k)
-		}
-	}
-	if len(a.sessions) > 100 {
-		a.sessions = map[string]session{}
-	}
-	a.sessions[sessionKey(token)] = s
+	a.mu.Lock()
 	delete(a.limits, ip)
 	a.mu.Unlock()
-	secure := r.TLS != nil || (os.Getenv("TRUST_PROXY") == "1" && r.Header.Get("X-Forwarded-Proto") == "https")
-	http.SetCookie(w, &http.Cookie{Name: "mail_harbor", Value: token, Path: "/", HttpOnly: true, Secure: secure, SameSite: http.SameSiteLaxMode, MaxAge: 7 * 86400})
-	jsonOut(w, 200, map[string]any{"csrf": s.CSRF, "username": v.Username})
+	a.issueSession(w, r, st.TOTPSecret != "" && st.PasswordPolicy >= 1 && !recovery, recovery, st)
 }
 func (a *App) publicState(w http.ResponseWriter) {
 	st := a.store.snapshot()
@@ -399,11 +444,14 @@ func (a *App) publicState(w http.ResponseWriter) {
 	}
 	accounts := []map[string]any{}
 	for _, v := range st.Accounts {
-		accounts = append(accounts, map[string]any{"id": v.ID, "name": v.Name, "email": v.Email, "provider": v.Provider, "enabled": v.Enabled, "clientId": v.ClientID, "authorized": v.Authorized, "hasSecret": v.Secret != "", "initialized": v.Initialized, "lastSync": v.LastSync, "lastError": v.LastError})
+		accounts = append(accounts, map[string]any{"id": v.ID, "name": v.Name, "email": v.Email, "provider": v.Provider, "enabled": v.Enabled, "clientId": v.ClientID, "authorized": v.Authorized, "hasSecret": v.Secret != "", "hasProxy": v.Proxy != "", "initialized": v.Initialized, "lastSync": v.LastSync, "lastError": v.LastError})
 	}
-	ch := map[string]any{"telegramEnabled": st.Channels.TelegramEnabled, "hasToken": st.Channels.Token != "", "chatId": st.Channels.ChatID, "botName": st.Channels.BotName, "webhookEnabled": st.Channels.WebhookEnabled, "webhookUrl": st.Channels.WebhookURL, "hasWebhookSecret": st.Channels.WebhookSecret != ""}
+	ch := map[string]any{"telegramEnabled": st.Channels.TelegramEnabled, "hasToken": st.Channels.Token != "", "chatId": st.Channels.ChatID, "botName": st.Channels.BotName, "webhookEnabled": st.Channels.WebhookEnabled, "webhookUrl": st.Channels.WebhookURL, "hasWebhookSecret": st.Channels.WebhookSecret != "", "hasWebhookHeaders": st.Channels.WebhookHeaders != "", "webhookBody": st.Channels.WebhookBody, "webhookMethod": st.Channels.WebhookMethod, "webhookBodyType": st.Channels.WebhookBodyType}
 	jobs := map[string]int{"pending": 0, "failed": 0, "sent": 0}
 	for _, j := range st.Jobs {
+		if j.Canceled {
+			continue
+		}
 		if j.Done {
 			jobs["sent"]++
 		} else if j.Attempts >= 8 {
@@ -420,17 +468,19 @@ func (a *App) publicState(w http.ResponseWriter) {
 	a.engine.mu.Unlock()
 	messages := st.Messages
 	sort.SliceStable(messages, func(i, j int) bool { return messages[i].Date > messages[j].Date })
-	jsonOut(w, 200, map[string]any{"accounts": accounts, "messages": messages, "channels": ch, "rules": st.Rules, "events": st.Events, "jobs": jobs, "busy": busy})
+	jsonOut(w, 200, map[string]any{"accounts": accounts, "messages": messages, "channels": ch, "rules": st.Rules, "events": st.Events, "sent": st.Sent, "jobs": jobs, "busy": busy})
 }
 
 type accountDraft struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Provider string `json:"provider"`
-	Email    string `json:"email"`
-	Enabled  bool   `json:"enabled"`
-	Password string `json:"password"`
-	ClientID string `json:"clientId"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Provider   string `json:"provider"`
+	Email      string `json:"email"`
+	Enabled    bool   `json:"enabled"`
+	Password   string `json:"password"`
+	ClientID   string `json:"clientId"`
+	Proxy      string `json:"proxy"`
+	ClearProxy bool   `json:"clearProxy"`
 }
 
 func (a *App) draft(v accountDraft) (Account, string, error) {
@@ -459,6 +509,14 @@ func (a *App) draft(v accountDraft) (Account, string, error) {
 	address, e := mail.ParseAddress(acc.Email)
 	if e != nil || address.Address != acc.Email || len(acc.Name) < 1 || len(acc.Name) > 60 {
 		return acc, "", errors.New("请填写有效邮箱地址和名称（最多60个字符）")
+	}
+	if v.ClearProxy {
+		acc.Proxy = ""
+	} else if v.Proxy != "" {
+		if e := validateProxy(v.Proxy); e != nil {
+			return acc, "", e
+		}
+		acc.Proxy = a.store.encrypt(strings.TrimSpace(v.Proxy))
 	}
 	if acc.Provider == "outlook" {
 		if !regexp.MustCompile(`^[0-9a-fA-F-]{36}$`).MatchString(acc.ClientID) {
@@ -495,6 +553,12 @@ func (a *App) saveAccount(w http.ResponseWriter, r *http.Request) {
 	err = a.store.update(func(st *State) error {
 		for i, old := range st.Accounts {
 			if old.ID == acc.ID {
+				if v.Proxy == "" && !v.ClearProxy {
+					acc.Proxy = old.Proxy
+				}
+				if v.Password == "" && acc.Provider != "outlook" {
+					acc.Secret = old.Secret
+				}
 				// Preserve checkpoints and refreshed OAuth credentials committed since the form opened.
 				if old.ClientID == acc.ClientID {
 					acc.Cursor = old.Cursor
@@ -541,6 +605,11 @@ func (a *App) testAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 	defer cancel()
+	ctx, err = accountContext(ctx, a.store, acc)
+	if err != nil {
+		fail(w, 400, err.Error())
+		return
+	}
 	c, err := imapConnect(ctx, acc, strings.TrimSpace(secret))
 	if err == nil {
 		_, err = c.Select("INBOX", true)
@@ -659,13 +728,18 @@ func (a *App) flags(w http.ResponseWriter, r *http.Request) {
 }
 
 type channelDraft struct {
-	TelegramEnabled    bool   `json:"telegramEnabled"`
-	Token              string `json:"token"`
-	ClearToken         bool   `json:"clearToken"`
-	WebhookEnabled     bool   `json:"webhookEnabled"`
-	WebhookURL         string `json:"webhookUrl"`
-	WebhookSecret      string `json:"webhookSecret"`
-	ClearWebhookSecret bool   `json:"clearWebhookSecret"`
+	TelegramEnabled     bool   `json:"telegramEnabled"`
+	Token               string `json:"token"`
+	ClearToken          bool   `json:"clearToken"`
+	WebhookEnabled      bool   `json:"webhookEnabled"`
+	WebhookURL          string `json:"webhookUrl"`
+	WebhookSecret       string `json:"webhookSecret"`
+	ClearWebhookSecret  bool   `json:"clearWebhookSecret"`
+	WebhookHeaders      string `json:"webhookHeaders"`
+	ClearWebhookHeaders bool   `json:"clearWebhookHeaders"`
+	WebhookBody         string `json:"webhookBody"`
+	WebhookMethod       string `json:"webhookMethod"`
+	WebhookBodyType     string `json:"webhookBodyType"`
 }
 
 func (a *App) channels(v channelDraft) (Channels, error) {
@@ -673,6 +747,31 @@ func (a *App) channels(v channelDraft) (Channels, error) {
 	ch.TelegramEnabled = v.TelegramEnabled
 	ch.WebhookEnabled = v.WebhookEnabled
 	ch.WebhookURL = strings.TrimSpace(v.WebhookURL)
+	ch.WebhookMethod = v.WebhookMethod
+	if ch.WebhookMethod == "" {
+		ch.WebhookMethod = "POST"
+	}
+	ch.WebhookBodyType = v.WebhookBodyType
+	if ch.WebhookBodyType == "" {
+		ch.WebhookBodyType = "json"
+	}
+	ch.WebhookBody = v.WebhookBody
+	if v.ClearWebhookHeaders {
+		ch.WebhookHeaders = ""
+	} else if v.WebhookHeaders != "" {
+		if _, e := validateHeaders(v.WebhookHeaders); e != nil {
+			return ch, e
+		}
+		ch.WebhookHeaders = a.store.encrypt(v.WebhookHeaders)
+	}
+	headers, e := a.store.decrypt(ch.WebhookHeaders)
+	if e != nil {
+		return ch, errors.New("请求头配置无法读取")
+	}
+	if e = validateWebhookSettings(ch, headers); e != nil {
+		return ch, e
+	}
+
 	if v.Token != "" {
 		if !regexp.MustCompile(`^[0-9]{5,20}:[A-Za-z0-9_-]{20,100}$`).MatchString(v.Token) {
 			return ch, errors.New("Telegram Token格式不正确")
@@ -714,6 +813,7 @@ func (a *App) saveChannels(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &v) {
 		return
 	}
+	expectedToken := a.store.snapshot().Channels.Token
 	ch, err := a.channels(v)
 	if err != nil {
 		fail(w, 400, err.Error())
@@ -743,6 +843,18 @@ func (a *App) saveChannels(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	a.mutate(w, func(st *State) error {
+		if st.Channels.Token != expectedToken {
+			return errors.New("notification settings changed")
+		}
+		if st.Channels.Token == ch.Token {
+			ch.ChatID = st.Channels.ChatID
+		}
+		if v.WebhookHeaders == "" && !v.ClearWebhookHeaders {
+			ch.WebhookHeaders = st.Channels.WebhookHeaders
+		}
+		if v.WebhookSecret == "" && !v.ClearWebhookSecret {
+			ch.WebhookSecret = st.Channels.WebhookSecret
+		}
 		if st.Channels.Token != ch.Token {
 			a.engine.mu.Lock()
 			a.engine.bindHash = ""
@@ -767,6 +879,11 @@ func (a *App) testWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	secret, _ := a.store.decrypt(ch.WebhookSecret)
+	ch, err = a.store.webhookReady(ch)
+	if err != nil {
+		fail(w, 400, err.Error())
+		return
+	}
 	err = sendWebhook(r.Context(), ch, secret, map[string]any{"event": "mail.test", "message": "邮屿Webhook连接测试，不包含邮件内容"}, randomID())
 	if err != nil {
 		fail(w, 400, err.Error())
@@ -818,36 +935,63 @@ func (a *App) rules(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		if rule.FilterMode != "" && rule.FilterMode != "all" && rule.FilterMode != "allow" && rule.FilterMode != "deny" {
+			fail(w, 400, "无效的名单模式")
+			return
+		}
+		if len(rule.SenderList) > 4000 || len(rule.KeywordList) > 4000 || (rule.FilterMode == "allow" && strings.TrimSpace(rule.SenderList+rule.KeywordList) == "") {
+			fail(w, 400, "白名单至少填写一项，名单最多4000字符")
+			return
+		}
 		ids[rule.ID] = true
 		v.Rules[i] = rule
 	}
-	a.mutate(w, func(st *State) error { st.Rules = v.Rules; return nil })
+	a.mutate(w, func(st *State) error {
+		st.Rules = v.Rules
+		for i, j := range st.Jobs {
+			if j.Done {
+				continue
+			}
+			if m, ok := findMessage(*st, j.MessageID); ok && notificationBlocked(st.Rules, m, j.Channel) {
+				st.Jobs[i].Done = true
+				st.Jobs[i].Canceled = true
+			}
+		}
+		return nil
+	})
 }
 func (a *App) security(w http.ResponseWriter, r *http.Request) {
 	var v struct {
 		Current  string `json:"current"`
 		Username string `json:"username"`
 		Password string `json:"password"`
+		Code     string `json:"code"`
 	}
 	if !decode(w, r, &v) {
 		return
 	}
-	st := a.store.snapshot()
+	st := a.store.authState()
 	if !passwordOK(st.Password, v.Current) {
 		fail(w, 400, "当前密码不正确")
 		return
 	}
-	if len(v.Password) < 12 || len(v.Password) > 256 || len(v.Username) < 1 || len(v.Username) > 64 {
-		fail(w, 400, "用户名1～64个字符，新密码至少12个字符")
+	if !strongPassword(v.Password) || len(v.Username) < 1 || len(v.Username) > 64 {
+		fail(w, 400, passwordRequirement)
+		return
+	}
+	if ok, _ := a.consumeSecondFactor(st, v.Code, false); !ok {
+		fail(w, 400, "验证码不正确或已使用，请等待下一组验证码")
 		return
 	}
 	hash := passwordHash(v.Password)
 	if err := a.store.update(func(next *State) error {
-		if next.Password != st.Password {
+		if next.Password != st.Password || next.AuthEpoch != st.AuthEpoch {
 			return errors.New("account changed")
 		}
 		next.Username = v.Username
 		next.Password = hash
+		next.PasswordPolicy = 1
+		next.AuthEpoch = randomID()
 		event(next, "security", "管理密码已修改")
 		return nil
 	}); err != nil {
@@ -870,6 +1014,11 @@ func (a *App) startOutlook(w http.ResponseWriter, r *http.Request, key string) {
 		fail(w, 400, "请先保存Outlook邮箱及Client ID")
 		return
 	}
+	ctx, proxyErr := accountContext(r.Context(), a.store, acc)
+	if proxyErr != nil {
+		fail(w, 400, proxyErr.Error())
+		return
+	}
 	var result struct {
 		Code     string `json:"device_code"`
 		User     string `json:"user_code"`
@@ -878,7 +1027,7 @@ func (a *App) startOutlook(w http.ResponseWriter, r *http.Request, key string) {
 		Interval int    `json:"interval"`
 		Error    string `json:"error"`
 	}
-	err := formJSON(r.Context(), msBase+"devicecode", url.Values{"client_id": {acc.ClientID}, "scope": {"offline_access https://graph.microsoft.com/Mail.Read https://graph.microsoft.com/User.Read"}}, &result)
+	err := formJSON(ctx, msBase+"devicecode", url.Values{"client_id": {acc.ClientID}, "scope": {"offline_access https://graph.microsoft.com/Mail.Read https://graph.microsoft.com/Mail.Send https://graph.microsoft.com/User.Read"}}, &result)
 	if err != nil || result.Code == "" || result.Error != "" {
 		fail(w, 400, "微软授权初始化失败，请检查Client ID、个人账号支持和公共客户端流开关")
 		return
@@ -916,8 +1065,18 @@ func (a *App) pollOutlook(w http.ResponseWriter, r *http.Request, key string) {
 	g.Next = time.Now().Unix() + int64(g.Interval)
 	a.grants[v.ID] = g
 	a.mu.Unlock()
+	acc, exists := findAccount(a.store.snapshot(), g.AccountID)
+	if !exists {
+		fail(w, 400, "邮箱配置已改变，请重新授权")
+		return
+	}
+	ctx, proxyErr := accountContext(r.Context(), a.store, acc)
+	if proxyErr != nil {
+		fail(w, 400, proxyErr.Error())
+		return
+	}
 	var tok msTokens
-	err := formJSON(r.Context(), msBase+"token", url.Values{"client_id": {g.ClientID}, "grant_type": {"urn:ietf:params:oauth:grant-type:device_code"}, "device_code": {g.Code}}, &tok)
+	err := formJSON(ctx, msBase+"token", url.Values{"client_id": {g.ClientID}, "grant_type": {"urn:ietf:params:oauth:grant-type:device_code"}, "device_code": {g.Code}}, &tok)
 	if err != nil {
 		fail(w, 502, err.Error())
 		return
@@ -938,9 +1097,9 @@ func (a *App) pollOutlook(w http.ResponseWriter, r *http.Request, key string) {
 		return
 	}
 	// Verify the authorized Microsoft mailbox matches the account being configured.
-	req, _ := http.NewRequestWithContext(r.Context(), "GET", "https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName", nil)
+	req, _ := http.NewRequestWithContext(ctx, "GET", "https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName", nil)
 	req.Header.Set("Authorization", "Bearer "+tok.Access)
-	resp, err := externalHTTP.Do(req)
+	resp, err := requestHTTP(ctx).Do(req)
 	if err != nil {
 		fail(w, 502, "微软账号校验失败")
 		return
@@ -1014,16 +1173,20 @@ func unpackBackup(data []byte, password string) (State, error) {
 	if json.Unmarshal(plain, &st) != nil || validateBackup(st) != nil {
 		return st, errors.New("备份结构或版本不受支持")
 	}
+	st.Version = 2
 	return st, nil
 }
 func validateBackup(st State) error {
 	bad := errors.New("invalid backup")
 	hash, e := base64.RawStdEncoding.DecodeString(st.Password)
-	if e != nil || len(hash) != 48 || st.Version != 1 || len(st.Username) < 1 || len(st.Username) > 64 || len(st.Accounts) > 20 || len(st.Messages) > maxMessages || len(st.Jobs) > 10000 || len(st.Rules) > 50 || len(st.Events) > 150 {
+	if e != nil || len(hash) != 48 || (st.Version != 1 && st.Version != 2) || len(st.Username) < 1 || len(st.Username) > 64 || len(st.Accounts) > 20 || len(st.Messages) > maxMessages || len(st.Jobs) > 10000 || len(st.Rules) > 50 || len(st.Events) > 150 || len(st.Sent) > 200 || len(st.Recovery) > 10 {
 		return bad
 	}
 	ids := map[string]bool{}
 	for _, acc := range st.Accounts {
+		if validateProxy(acc.Proxy) != nil {
+			return bad
+		}
 		if len(acc.ID) < 1 || len(acc.ID) > 100 || ids[acc.ID] || len(acc.Name) > 60 || len(acc.Secret) > 20000 {
 			return bad
 		}
@@ -1075,6 +1238,10 @@ func (a *App) backup(w http.ResponseWriter, r *http.Request, restore bool) {
 		fail(w, 400, "备份密码至少12个字符，请妥善保存")
 		return
 	}
+	if !restore && !strongPassword(v.Password) {
+		fail(w, 400, passwordRequirement)
+		return
+	}
 	if !restore {
 		st := a.store.snapshot()
 		for i, acc := range st.Accounts {
@@ -1084,8 +1251,24 @@ func (a *App) backup(w http.ResponseWriter, r *http.Request, restore bool) {
 				return
 			}
 			st.Accounts[i].Secret = plain
+			proxy, err := a.store.decrypt(acc.Proxy)
+			if err != nil {
+				fail(w, 500, "代理配置读取失败")
+				return
+			}
+			st.Accounts[i].Proxy = proxy
 		}
 		var err error
+		st.TOTPSecret, err = a.store.decrypt(st.TOTPSecret)
+		if err != nil {
+			fail(w, 500, "安全设置读取失败")
+			return
+		}
+		st.Channels.WebhookHeaders, err = a.store.decrypt(st.Channels.WebhookHeaders)
+		if err != nil {
+			fail(w, 500, "通知设置读取失败")
+			return
+		}
 		st.Channels.Token, err = a.store.decrypt(st.Channels.Token)
 		if err != nil {
 			fail(w, 500, "通道凭据读取失败")
@@ -1119,7 +1302,11 @@ func (a *App) backup(w http.ResponseWriter, r *http.Request, restore bool) {
 	for i, acc := range st.Accounts {
 		st.Accounts[i].Secret = a.store.encrypt(acc.Secret)
 		st.Accounts[i].Generation = randomID()
+		st.Accounts[i].Proxy = a.store.encrypt(acc.Proxy)
 	}
+	st.TOTPSecret = a.store.encrypt(st.TOTPSecret)
+	st.AuthEpoch = randomID()
+	st.Channels.WebhookHeaders = a.store.encrypt(st.Channels.WebhookHeaders)
 	st.Channels.Token = a.store.encrypt(st.Channels.Token)
 	st.Channels.WebhookSecret = a.store.encrypt(st.Channels.WebhookSecret)
 	a.engine.mu.Lock()

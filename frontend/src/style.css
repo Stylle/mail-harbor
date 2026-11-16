@@ -8,7 +8,7 @@
   --side: #f0f0f3;
   --soft: #f3f3f5;
   --text: #1d1d1f;
-  --muted: #86868b;
+  --muted: #6f7580;
   --line: #dedee2;
   --accent: #007aff;
   --accent-soft: #e5eefc;
@@ -1639,5 +1639,451 @@ input[readonly] {
     transition: none !important;
     animation: none !important;
     scroll-behavior: auto !important;
+  }
+}
+
+/* Mail workspace: readable type, distinct message cards and restrained accents. */
+.app-shell {
+  max-width: 2480px;
+  grid-template-columns: 244px minmax(0, 1fr);
+}
+.inbox-layout {
+  grid-template-columns: minmax(340px, 420px) minmax(0, 1fr);
+}
+.sidebar nav button {
+  font-size: 14px;
+  min-height: 39px;
+}
+.sidebar nav svg {
+  width: 21px;
+  height: 21px;
+}
+.brand b {
+  font-size: 20px;
+}
+.topbar-title {
+  font-size: 15px;
+}
+.topbar {
+  padding-left: 30px;
+  padding-right: 30px;
+}
+.list-heading h1 {
+  font-size: 24px;
+}
+.list-heading p,
+.search-field input {
+  font-size: 13px;
+}
+.message-scroll {
+  padding: 3px 12px 14px;
+}
+.message-item {
+  width: 100%;
+  margin: 0 0 10px;
+  padding: 18px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 1px 2px #00000004;
+}
+.message-item:hover:not(:disabled) {
+  background: var(--hover);
+  border-color: color-mix(in srgb, var(--muted) 60%, var(--line));
+}
+.message-item.selected,
+.message-item.selected:hover:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+.message-sender strong {
+  font-size: 16px;
+}
+.message-item h2 {
+  font-size: 14px;
+  margin-top: 10px;
+}
+.message-item > p {
+  font-size: 13px;
+  line-height: 1.6;
+}
+.message-meta {
+  font-size: 11px;
+}
+.message-meta svg {
+  width: 15px;
+  height: 15px;
+}
+.message-sender time {
+  font-size: 11px;
+}
+.message-list {
+  background: var(--side);
+}
+.list-footer {
+  background: var(--surface);
+}
+.mail-content {
+  padding: 40px 44px;
+}
+.mail-content > h1 {
+  font-size: 30px;
+  line-height: 1.4;
+}
+.sender-block b {
+  font-size: 15px;
+}
+.sender-block small,
+.sender-block time {
+  font-size: 12px;
+}
+.sender-avatar {
+  width: 42px;
+  height: 42px;
+  font-size: 17px;
+}
+.mail-text {
+  font-size: 16px;
+  line-height: 1.85;
+}
+.mail-text a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  overflow-wrap: anywhere;
+}
+.privacy-note {
+  font-size: 11px;
+}
+button,
+.button {
+  font-size: 14px;
+}
+.settings-card {
+  padding: 28px;
+}
+.settings-card h2 {
+  font-size: 19px;
+}
+.settings-card > p,
+.page-heading p,
+.card-heading p {
+  font-size: 14px;
+}
+label {
+  font-size: 14px;
+}
+textarea {
+  font: inherit;
+  display: block;
+  resize: vertical;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 12px;
+  line-height: 1.6;
+  font-size: 14px;
+}
+textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.language-button {
+  padding: 6px 9px;
+  background: var(--soft);
+  font-size: 12px;
+}
+.auth-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.auth-language {
+  align-self: flex-end;
+  margin: 0 5% -20px;
+}
+.provider-setup-link {
+  font-size: 13px;
+  display: inline-block;
+  margin: 14px 0 0;
+  text-decoration: none;
+}
+.proxy-options {
+  margin: 23px 0;
+  padding: 15px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+}
+.proxy-options summary {
+  font-size: 14px;
+  cursor: pointer;
+}
+.inline-error {
+  color: var(--danger);
+  font-size: 13px;
+  margin-top: 16px;
+  line-height: 1.6;
+}
+.enroll-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  padding: 32px;
+  width: 540px;
+  max-width: calc(100% - 32px);
+  margin: 30px auto 50px;
+}
+.enroll-card h1 {
+  font-size: 25px;
+  margin-bottom: 12px;
+}
+.enroll-card > p,
+.enroll-card > div > p {
+  font-size: 14px;
+  color: var(--muted);
+  margin: 12px 0 22px;
+  line-height: 1.8;
+}
+.enroll-card form > button {
+  margin-top: 22px;
+}
+.qr-enrollment {
+  text-align: center;
+  margin: 24px 0;
+}
+.qr-enrollment img {
+  background: white;
+  border-radius: 12px;
+  max-width: 100%;
+  height: auto;
+}
+.qr-enrollment details {
+  font-size: 12px;
+  margin-top: 10px;
+  color: var(--muted);
+}
+.qr-enrollment code {
+  display: block;
+  margin: 12px 0;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+.recovery-codes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 11px;
+  padding: 20px;
+  background: var(--soft);
+  border-radius: 9px;
+  user-select: all;
+}
+.recovery-codes code {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.compose-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: #11182766;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 25px;
+  overscroll-behavior: contain;
+}
+.compose-panel {
+  background: var(--surface);
+  width: 820px;
+  max-width: 100%;
+  max-height: 92dvh;
+  overflow: auto;
+  box-shadow: var(--shadow);
+  border: 1px solid var(--line);
+  border-radius: 15px;
+}
+.compose-panel > header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  padding: 17px 26px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.compose-panel form {
+  padding: 0 28px 25px;
+}
+.compose-panel footer {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  border-top: 1px solid var(--line);
+  margin-top: 20px;
+  padding-top: 20px;
+  flex-wrap: wrap;
+}
+.compose-panel footer .primary {
+  margin-left: auto;
+}
+.compose-panel footer small {
+  font-size: 11px;
+  color: var(--muted);
+  flex: 1;
+}
+.compose-attachments > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  background: var(--soft);
+  border-radius: 8px;
+  padding: 5px 10px;
+  margin-top: 8px;
+}
+.compose-attachments span {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+.sent-record {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  padding: 18px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+.sent-record > div {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.sent-record small {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+}
+.sent-record time {
+  color: var(--muted);
+  font-size: 11px;
+}
+button.nav-overlay,
+button.nav-overlay:hover:not(:disabled),
+button.nav-overlay:active,
+button.nav-overlay:focus {
+  background: rgba(15, 20, 32, 0.35);
+  border: 0;
+  box-shadow: none;
+  transition: none;
+  outline: none;
+}
+@media (max-width: 1200px) {
+  .app-shell {
+    grid-template-columns: 218px minmax(0, 1fr);
+  }
+  .inbox-layout {
+    grid-template-columns: 340px minmax(0, 1fr);
+  }
+  .mail-content {
+    padding: 30px;
+  }
+  .mail-content > h1 {
+    font-size: 26px;
+  }
+  .sidebar nav button {
+    font-size: 13px;
+  }
+}
+@media (max-width: 900px) {
+  .app-shell {
+    display: block;
+  }
+  .inbox-layout {
+    grid-template-columns: 340px minmax(0, 1fr);
+  }
+  .sidebar {
+    width: 252px;
+  }
+  .mail-content {
+    padding: 28px;
+  }
+  .topbar {
+    padding: 0 20px;
+  }
+}
+@media (max-width: 650px) {
+  .inbox-layout {
+    display: block;
+  }
+  .message-scroll {
+    padding: 3px 13px 15px;
+  }
+  .message-item {
+    padding: 17px 13px;
+  }
+  .message-sender strong {
+    font-size: 16px;
+  }
+  .message-item h2 {
+    font-size: 14px;
+  }
+  .message-item > p {
+    font-size: 13px;
+  }
+  .message-meta {
+    font-size: 11px;
+  }
+  .mail-content {
+    padding: 28px 22px;
+  }
+  .mail-content > h1 {
+    font-size: 26px;
+  }
+  .mail-text {
+    font-size: 16px;
+  }
+  .settings-card {
+    padding: 23px 19px;
+  }
+  .compose-overlay {
+    padding: 0;
+    align-items: stretch;
+  }
+  .compose-panel {
+    width: 100%;
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+  }
+  .compose-panel form {
+    padding: 0 20px 25px;
+  }
+  .compose-panel > header {
+    padding: 14px 20px;
+  }
+  .compose-panel footer small {
+    order: 3;
+    flex-basis: 100%;
+  }
+  .sent-record {
+    flex-wrap: wrap;
+  }
+  .sent-record time {
+    width: 100%;
+  }
+  .recovery-codes {
+    grid-template-columns: 1fr;
+    gap: 9px;
+  }
+  .enroll-card {
+    padding: 25px;
+  }
+  .topbar-actions {
+    gap: 10px;
   }
 }

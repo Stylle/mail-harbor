@@ -8,5 +8,6 @@ Mail Harbor's original code is MIT licensed. Dependencies retain their own copyr
 - modernc SQLite and its Go runtime dependencies: https://pkg.go.dev/modernc.org/sqlite . Consult included license notices for component-specific terms.
 - Go x/crypto, x/net, x/text and x/sys: BSD-3-Clause, https://go.googlesource.com/ .
 - Remaining transitive module notices are included by module name.
+- go-qrcode (MIT): https://github.com/skip2/go-qrcode . Generates authenticator QR images locally; no third-party QR service receives setup keys.
 
 The interface references Apple Mail's interaction and layout conventions. No Apple logo, screenshot, font file or proprietary UI asset is bundled. System fonts use fonts already installed on the device. The Apple support screenshot used for local design comparison stays outside this repository.

@@ -5,5 +5,9 @@ services:
     ports: ["28187:8080"]
     volumes: ["mail-harbor-data:/data"]
     restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m,mode=1777"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
 volumes:
   mail-harbor-data:

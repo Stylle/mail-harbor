@@ -1,5 +1,15 @@
 # Design and validation · 2026-11-16
 
+## Local maintenance v0.2.0
+
+Supersedes the initial limitations below: compose/reply and outgoing submission history are now available. Rounded message cards, larger reading typography, restrained provider colors, Chinese/English switching and the tablet drawer overlay were checked using synthetic mail only. Optional per-account HTTP CONNECT, HTTPS and SOCKS5 proxies cover IMAP, SMTP and Microsoft authorization/Graph requests. Notification settings now support custom JSON headers/body templates and allow/block lists; block rules take precedence per account/channel.
+
+Mandatory TOTP enrollment, strong passwords, single-use recovery codes, replay prevention, restricted enrollment sessions and credential-change session revocation are implemented. HTML mail remains converted to plain text; safe anchor targets are preserved as clickable text without executing scripts or loading tracking images.
+
+Validation: 22 Go tests, go vet and Linux race checks passed; four frontend tests, TypeScript/Vite production build and dependency audit passed. Isolated Edge/Playwright checks at phone, tablet, desktop and 4K widths passed, including fresh TOTP enrollment/login, language persistence, drawer dismissal, safe links, compose attachments and configuration forms. Both native and strict read-only Docker deployments were exercised. SMTP/Graph sending and authorization used protocol mocks; no real email was sent. Real provider sending, external proxies and Safari/iOS hardware remain unverified.
+
+Native and Docker previews were upgraded locally after separate stopped-data backups. Both report version 0.2.0 and healthy status. The existing native master key and record identities were preserved during schema v1 to v2 migration. No GitHub or Docker Hub publication was performed.
+
 Local result: passed. Real mailbox/provider authorization remains pending user configuration.
 
 The first green/marketing-oriented pass was replaced at the user's request. The final interface follows Apple Mail conventions: neutral gray mailbox sidebar, blue current-message selection, installed system fonts, compact toolbars, a plain reading surface and a simple no-message-selected state. No marketing eyebrow text, decorative hero illustration, fake macOS window controls or Apple proprietary assets are shipped. Settings retain the application's actual account/notification/backup requirements.

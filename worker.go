@@ -84,7 +84,26 @@ func (e *Engine) schedule(ctx context.Context, id string) bool {
 	return true
 }
 func matches(r Rule, m Message) bool {
-	return r.Enabled && (r.AccountID == "" || r.AccountID == m.AccountID) && (r.Sender == "" || strings.Contains(strings.ToLower(m.Sender), strings.ToLower(r.Sender))) && (r.Keyword == "" || strings.Contains(strings.ToLower(m.Subject+" "+m.Preview), strings.ToLower(r.Keyword)))
+	if !r.Enabled || (r.AccountID != "" && r.AccountID != m.AccountID) || (r.Sender != "" && !strings.Contains(strings.ToLower(m.Sender), strings.ToLower(r.Sender))) || (r.Keyword != "" && !strings.Contains(strings.ToLower(m.Subject+" "+m.Preview), strings.ToLower(r.Keyword))) {
+		return false
+	}
+	if r.FilterMode == "" || r.FilterMode == "all" {
+		return true
+	}
+	matchesAny := func(raw, value string) bool {
+		for _, part := range strings.FieldsFunc(raw, func(r rune) bool { return r == '\n' || r == ',' || r == ';' }) {
+			part = strings.ToLower(strings.TrimSpace(part))
+			if part != "" && strings.Contains(strings.ToLower(value), part) {
+				return true
+			}
+		}
+		return false
+	}
+	hit := matchesAny(r.SenderList, m.Sender) || matchesAny(r.KeywordList, m.Subject+" "+m.Preview)
+	if r.FilterMode == "allow" {
+		return hit
+	}
+	return !hit
 }
 func mergeMessages(st *State, a Account, in []Message, notify bool) {
 	indices := map[string]int{}
@@ -112,6 +131,9 @@ func mergeMessages(st *State, a Account, in []Message, notify bool) {
 				continue
 			}
 			for _, ch := range []string{"telegram", "webhook"} {
+				if notificationBlocked(st.Rules, m, ch) {
+					continue
+				}
 				if (ch == "telegram" && r.Telegram) || (ch == "webhook" && r.Webhook) {
 					st.Jobs = append(st.Jobs, Job{ID: randomID(), MessageID: m.ID, RuleID: r.ID, Channel: ch, Mode: r.Mode, Next: time.Now().Unix()})
 				}
@@ -120,6 +142,18 @@ func mergeMessages(st *State, a Account, in []Message, notify bool) {
 	}
 	sort.SliceStable(st.Messages, func(i, j int) bool { return st.Messages[i].Date < st.Messages[j].Date })
 }
+func notificationBlocked(rules []Rule, m Message, channel string) bool {
+	for _, r := range rules {
+		if r.FilterMode != "deny" || (channel == "telegram" && !r.Telegram) || (channel == "webhook" && !r.Webhook) {
+			continue
+		}
+		r.FilterMode = "allow"
+		if matches(r, m) {
+			return true
+		}
+	}
+	return false
+}
 func (e *Engine) syncAccount(ctx context.Context, id string) {
 	a, ok := findAccount(e.store.snapshot(), id)
 	if !ok || !a.Enabled {
@@ -127,7 +161,11 @@ func (e *Engine) syncAccount(ctx context.Context, id string) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
+	ctx, proxyErr := accountContext(ctx, e.store, a)
 	secret, err := e.store.decrypt(a.Secret)
+	if proxyErr != nil {
+		err = proxyErr
+	}
 	var messages []Message
 	next := a
 	updatedSecret := ""
@@ -172,6 +210,10 @@ func (e *Engine) detail(ctx context.Context, m Message) (fetchedMail, error) {
 	a, ok := findAccount(e.store.snapshot(), m.AccountID)
 	if !ok {
 		return fetchedMail{}, errors.New("邮箱已移除")
+	}
+	ctx, proxyErr := accountContext(ctx, e.store, a)
+	if proxyErr != nil {
+		return fetchedMail{}, proxyErr
 	}
 	secret, err := e.store.decrypt(a.Secret)
 	if err != nil {
@@ -250,9 +292,23 @@ func sendWebhook(ctx context.Context, ch Channels, secret string, payload any, i
 	if err := webhookURL(ch.WebhookURL); err != nil {
 		return err
 	}
-	b, _ := json.Marshal(payload)
-	req, _ := http.NewRequestWithContext(ctx, "POST", ch.WebhookURL, strings.NewReader(string(b)))
-	req.Header.Set("Content-Type", "application/json")
+	b, contentType, err := renderWebhook(ch, payload)
+	if err != nil {
+		return err
+	}
+	headers, err := validateHeaders(ch.WebhookHeaders)
+	if err != nil {
+		return err
+	}
+	method := ch.WebhookMethod
+	if method == "" {
+		method = "POST"
+	}
+	req, _ := http.NewRequestWithContext(ctx, method, ch.WebhookURL, strings.NewReader(string(b)))
+	req.Header.Set("Content-Type", contentType)
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
 	req.Header.Set("Idempotency-Key", id)
 	stamp := strconv.FormatInt(time.Now().Unix(), 10)
 	req.Header.Set("X-Mail-Harbor-Timestamp", stamp)
@@ -284,6 +340,23 @@ func (e *Engine) deliver(ctx context.Context) {
 	st := e.store.snapshot()
 	sent := 0
 	for _, job := range st.Jobs {
+		e.mu.Lock()
+		paused := e.paused
+		e.mu.Unlock()
+		if paused {
+			return
+		}
+		latest := e.store.snapshot()
+		skip := false
+		for _, saved := range latest.Jobs {
+			if saved.ID == job.ID && saved.Done {
+				skip = true
+				break
+			}
+		}
+		if skip {
+			continue
+		}
 		if job.Done || job.Next > time.Now().Unix() || job.Attempts >= 8 {
 			continue
 		}
@@ -340,7 +413,12 @@ func (e *Engine) deliver(ctx context.Context) {
 						err = errors.New("Webhook未启用")
 					} else {
 						secret, _ := e.store.decrypt(st.Channels.WebhookSecret)
-						err = sendWebhook(ctx, st.Channels, secret, payload, job.ID)
+						ready, prepareErr := e.store.webhookReady(st.Channels)
+						if prepareErr != nil {
+							err = prepareErr
+						} else {
+							err = sendWebhook(ctx, ready, secret, payload, job.ID)
+						}
 					}
 				}
 			}

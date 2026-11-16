@@ -50,7 +50,7 @@ func request(t *testing.T, a *App, path string, data any, cookie *http.Cookie, c
 }
 func setup(t *testing.T, a *App) (*http.Cookie, string) {
 	t.Helper()
-	w := request(t, a, "setup", map[string]string{"username": "tester", "password": "isolated-example-password"}, nil, "")
+	w := request(t, a, "setup", map[string]string{"username": "tester", "password": "Isolated-Example9!password"}, nil, "")
 	if w.Code != 200 {
 		t.Fatal("setup failed", w.Code)
 	}
@@ -58,7 +58,19 @@ func setup(t *testing.T, a *App) (*http.Cookie, string) {
 		CSRF string `json:"csrf"`
 	}
 	_ = json.Unmarshal(w.Body.Bytes(), &v)
-	return w.Result().Cookies()[0], v.CSRF
+	cookie := w.Result().Cookies()[0]
+	begin := request(t, a, "2fa/begin", map[string]string{}, cookie, v.CSRF)
+	var pending struct {
+		Secret string `json:"secret"`
+	}
+	_ = json.Unmarshal(begin.Body.Bytes(), &pending)
+	confirm := request(t, a, "2fa/confirm", map[string]string{"code": totp(pending.Secret, time.Now().Unix()/30)}, cookie, v.CSRF)
+	if confirm.Code != 200 {
+		t.Fatal("2FA fixture setup failed")
+	}
+	_ = json.Unmarshal(confirm.Body.Bytes(), &v)
+	_ = a.store.update(func(st *State) error { st.TOTPLast = time.Now().Unix()/30 - 1; return nil })
+	return confirm.Result().Cookies()[0], v.CSRF
 }
 
 func TestAuthenticationAndSecretRedaction(t *testing.T) {
@@ -96,17 +108,17 @@ func TestAuthenticationAndSecretRedaction(t *testing.T) {
 	if strings.Contains(public, "synthetic-credential") || strings.Contains(public, st.Password) || strings.Contains(public, st.Accounts[0].Secret) {
 		t.Fatal("secret leaked")
 	}
-	w = request(t, a, "security", map[string]string{"current": "isolated-example-password", "username": "changed", "password": "replacement-test-password"}, cookie, csrf)
+	w = request(t, a, "security", map[string]string{"current": "Isolated-Example9!password", "username": "changed", "password": "Replacement-Test9!password", "code": totp(mustSecret(t, a), time.Now().Unix()/30)}, cookie, csrf)
 	if w.Code != 200 {
 		t.Fatal("password change failed")
 	}
 	if request(t, a, "state", nil, cookie, "").Code != 401 {
 		t.Fatal("old session survived")
 	}
-	if request(t, a, "login", map[string]string{"username": "tester", "password": "isolated-example-password"}, nil, "").Code != 401 {
+	if request(t, a, "login", map[string]string{"username": "tester", "password": "Isolated-Example9!password"}, nil, "").Code != 401 {
 		t.Fatal("old login survived")
 	}
-	if request(t, a, "login", map[string]string{"username": "changed", "password": "replacement-test-password"}, nil, "").Code != 200 {
+	if request(t, a, "login", map[string]string{"username": "changed", "password": "Replacement-Test9!password", "code": totp(mustSecret(t, a), time.Now().Unix()/30+1)}, nil, "").Code != 200 {
 		t.Fatal("new login rejected")
 	}
 }
@@ -146,7 +158,7 @@ func TestBackupAcrossMasterKeysAndAtomicRestore(t *testing.T) {
 		st.Messages = []Message{{ID: "m", AccountID: "a", RemoteID: "90", Subject: "private subject", Starred: true}}
 		return nil
 	})
-	backup := request(t, source, "backup", map[string]string{"password": "portable-backup-password"}, cookie, csrf)
+	backup := request(t, source, "backup", map[string]string{"password": "Portable-Backup9!password"}, cookie, csrf)
 	if backup.Code != 200 {
 		t.Fatal("backup failed")
 	}
@@ -161,7 +173,7 @@ func TestBackupAcrossMasterKeysAndAtomicRestore(t *testing.T) {
 	if bad.Code != 400 || target.store.snapshot().Revision != before.Revision {
 		t.Fatal("bad restore modified state")
 	}
-	good := request(t, target, "restore", map[string]string{"password": "portable-backup-password", "data": data}, tc, ts)
+	good := request(t, target, "restore", map[string]string{"password": "Portable-Backup9!password", "data": data}, tc, ts)
 	if good.Code != 200 {
 		t.Fatal("restore failed", good.Code)
 	}
@@ -333,4 +345,13 @@ func TestIMAPBaselineIncrementalAndPeek(t *testing.T) {
 	if e != nil || len(reset) != 2 || reindexed.UIDValidity == 999 {
 		t.Fatal("UIDVALIDITY change not recovered", e)
 	}
+}
+
+func mustSecret(t *testing.T, a *App) string {
+	t.Helper()
+	s, e := a.store.decrypt(a.store.snapshot().TOTPSecret)
+	if e != nil {
+		t.Fatal("cannot read test authenticator")
+	}
+	return s
 }
