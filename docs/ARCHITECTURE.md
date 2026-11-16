@@ -1,0 +1,3 @@
+# Architecture
+
+Go embeds Vue, SQLite persists an atomic bounded state snapshot. Per-account adapter: IMAP TLS + authorization/app password for QQ,163,Gmail; Microsoft Graph delegated OAuth device authorization for Outlook. Server owns synchronization and notification queues. Mail headers cached; body/attachments fetched on demand with size caps. AES-256-GCM for credentials; private volume key. Portable password-encrypted backup includes decrypted logical secrets inside the encrypted archive, never as a loose file. No third-party cloud hosting or analytics. Single administrator, no public registration. Public HTML mail content is never executed. Source and Docker preview use independent data directories.

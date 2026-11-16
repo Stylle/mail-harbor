@@ -1,0 +1,9 @@
+.git
+frontend/node_modules
+web/*
+!web/.keep
+data
+runtime
+*.exe
+*.log
+.env*
