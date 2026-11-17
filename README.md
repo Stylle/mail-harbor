@@ -2,7 +2,7 @@
 
 个人自托管多邮箱收件与通知中心。Go + Vue + SQLite，参考 Apple Mail 的邮件导航、列表和阅读区布局，支持深浅色及手机/平板/桌面。
 
-当前版本 v0.2.2。源码：[GitHub](https://github.com/Stylle/mail-harbor)，镜像：[Docker Hub](https://hub.docker.com/r/stylle/mail-harbor)，支持 linux/amd64 和 linux/arm64。生产界面不包含示例邮件，真实邮箱和通知渠道需要部署者自行授权。
+当前版本 v0.2.3。源码：[GitHub](https://github.com/Stylle/mail-harbor)，镜像：[Docker Hub](https://hub.docker.com/r/stylle/mail-harbor)，支持 linux/amd64 和 linux/arm64。生产界面不包含示例邮件，真实邮箱和通知渠道需要部署者自行授权。
 
 ## 功能
 
@@ -27,14 +27,14 @@ docker compose up -d
 打开 `http://服务器:28187` 创建管理账户，强制绑定验证器并保存恢复码，然后添加邮箱。已有v0.1账户升级后先用原密码登录，再设置强密码和验证器；邮箱、同步进度和索引保留。首次初始化前不要把未配置实例暴露到公网；公网访问使用 HTTPS 反向代理。
 
 ```sh
-docker run -d --name mail-harbor --restart unless-stopped -p 28187:8080 -v mail-harbor-data:/data stylle/mail-harbor:v0.2.2
+docker run -d --name mail-harbor --restart unless-stopped -p 28187:8080 -v mail-harbor-data:/data stylle/mail-harbor:v0.2.3
 ```
 
 默认 Compose 自动创建数据卷，并先执行一次无网络的 `data-init` 任务，准备专用目录及已有密钥/SQLite文件的属主，然后退出。邮件服务始终以普通用户运行、无额外容器能力。无需手动设置700/600或在宿主机执行chown。自定义宿主机目录时，仅修改 `mail-harbor` 下的挂载，初始化任务通过YAML引用使用相同挂载；保留原来的数据位置。目录和文件的权限模式不被强制改写，新建密钥/数据库仍使用私有权限。NAS ACL、只读挂载或禁止属主调整的远程文件系统仍需实际允许容器读写，程序不能绕过宿主机限制。
 
 只需一个长期运行的邮件服务和一个数据卷，无 Redis 或外部数据库。`data-init` 是启动前任务，显示退出码0代表准备完成，属于正常状态。容器 UID/GID10001。`/data` 的 `master.key` 和数据库必须同时保留，单个卷只供一个实例使用。
 
-从源码构建可运行 `docker compose up -d --build`。更新前下载加密备份，并保留原数据卷；拉取新版后重新创建容器即可，不要删除数据卷。`latest` 跟随稳定版本，固定版本部署使用 `v0.2.2`。
+从源码构建可运行 `docker compose up -d --build`。更新前下载加密备份，并保留原数据卷；拉取新版后重新创建容器即可，不要删除数据卷。`latest` 跟随稳定版本，固定版本部署使用 `v0.2.3`。
 
 可选环境变量：`LISTEN_ADDR`（容器默认 `:8080`）、`DATA_DIR`（默认 `/data`）；`USER`、`PASSWORD` 仅首次初始化生效，密码至少12字符，并包含大写、小写、数字和符号。`TRUST_PROXY=1` 仅用于由可信代理覆盖 `X-Forwarded-Proto` 的 HTTPS 部署，启用 Secure Cookie。会话在进程内保存，重启服务需要重新登录，邮箱授权和同步进度仍保留。
 
@@ -93,7 +93,7 @@ MIT 开源，依赖许可见 [第三方说明](docs/THIRD-PARTY.md)。不向源�
 
 接口需要登录、强制2FA及写操作CSRF校验；登录和安全操作有限速。邮件文本通过参数化SQLite保存，不拼接SQL。正文仅显示文本和白名单协议链接，禁止执行HTML/JavaScript，不加载跟踪图片；外链使用noopener/noreferrer。请求头禁止CRLF和连接控制覆盖，Webhook禁止重定向及回环/链路本地目标。公网仍需HTTPS、及时更新和妥善保护主机/数据卷；这些措施不构成绝对安全保证，主机完全失陷仍可能暴露邮件和凭据。
 
-## 数据目录启动错误与升级至 v0.2.2
+## 数据目录启动错误与升级至 v0.2.3
 
 旧版将权限不足、密钥缺失和密钥损坏合并成同一条错误。新版分别提示读取/创建权限、路径类型、无效长度、数据库缺少配套密钥及密钥不匹配；错误不会包含密钥内容。
 

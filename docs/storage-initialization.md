@@ -1,4 +1,4 @@
-# Storage initialization · v0.2.2
+# Storage initialization · v0.2.3
 
 Root cause: the unprivileged service could not create/read master.key on root-owned bind mounts, but both cases were collapsed into the corrupt-key error. v0.2.1 removed chmod without addressing ownership.
 
