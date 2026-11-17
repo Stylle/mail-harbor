@@ -2,7 +2,7 @@
 
 个人自托管多邮箱收件与通知中心。Go + Vue + SQLite，参考 Apple Mail 的邮件导航、列表和阅读区布局，支持深浅色及手机/平板/桌面。
 
-当前版本 v0.2.4。源码：[GitHub](https://github.com/Stylle/mail-harbor)，镜像：[Docker Hub](https://hub.docker.com/r/stylle/mail-harbor)，支持 linux/amd64 和 linux/arm64。生产界面不包含示例邮件，真实邮箱和通知渠道需要部署者自行授权。
+当前版本 v0.2.5。源码：[GitHub](https://github.com/Stylle/mail-harbor)，镜像：[Docker Hub](https://hub.docker.com/r/stylle/mail-harbor)，支持 linux/amd64 和 linux/arm64。生产界面不包含示例邮件，真实邮箱和通知渠道需要部署者自行授权。
 
 ## 功能
 
@@ -27,14 +27,14 @@ docker compose up -d
 打开 `http://服务器:28187` 创建管理账户，强制绑定验证器并保存恢复码，然后添加邮箱。已有v0.1账户升级后先用原密码登录，再设置强密码和验证器；邮箱、同步进度和索引保留。首次初始化前不要把未配置实例暴露到公网；公网访问使用 HTTPS 反向代理。
 
 ```sh
-docker run -d --name mail-harbor --restart unless-stopped -p 28187:8080 -v mail-harbor-data:/data stylle/mail-harbor:v0.2.4
+docker run -d --name mail-harbor --restart unless-stopped -p 28187:8080 -v mail-harbor-data:/data stylle/mail-harbor:v0.2.5
 ```
 
 只需一个容器和一个数据卷，无 Redis、外部数据库或额外初始化服务。普通 Compose 和 `docker run` 均会在容器内部自动准备专用数据目录及固定密钥/SQLite文件的属主，再切换到 UID/GID10001 执行邮件服务；实际邮件进程没有有效/许可能力，并设置 no_new_privs。无需手动 chmod/chown，也不要求额外的 data-init 服务。已有文件内容及权限模式保留。
 
 默认使用 Docker 命名卷；也可直接绑定自己已有的专用目录，例如 `./data:/data`。升级保留原挂载及 master.key。宿主机若通过只读挂载、ACL或root-squash明确禁止访问，容器无法绕过该限制。自定义非root的 `user` 时跳过属主准备，已有目录需允许该用户读写。
 
-从源码构建可运行 `docker compose up -d --build`。更新前下载加密备份，并保留原数据卷；拉取新版后重新创建容器即可，不要删除数据卷。`latest` 跟随稳定版本，固定版本部署使用 `v0.2.4`。
+从源码构建可运行 `docker compose up -d --build`。更新前下载加密备份，并保留原数据卷；拉取新版后重新创建容器即可，不要删除数据卷。`latest` 跟随稳定版本，固定版本部署使用 `v0.2.5`。
 
 可选环境变量：`LISTEN_ADDR`（容器默认 `:8080`）、`DATA_DIR`（默认 `/data`）；`USER`、`PASSWORD` 仅首次初始化生效，密码至少12字符，并包含大写、小写、数字和符号。`TRUST_PROXY=1` 仅用于由可信代理覆盖 `X-Forwarded-Proto` 的 HTTPS 部署，启用 Secure Cookie。会话在进程内保存，重启服务需要重新登录，邮箱授权和同步进度仍保留。
 

@@ -1,6 +1,6 @@
 # Zoom, settings scrolling and webhook formatting
 
-Local maintenance, not yet published.
+Included in v0.2.5.
 
 Responsive layout flags derive from the actual outer browser-window width. Page zoom changes the CSS viewport without changing those flags; real window resizes still select desktop/tablet/phone modes. Desktop/tablet keep minimum readable column widths and allow horizontal navigation when zoomed. No browser zoom shortcut or wheel event is canceled. Bounded app/main containers give settings their own vertical scroll area, including the wide-screen frame; navigation resets settings scroll to the top.
 
