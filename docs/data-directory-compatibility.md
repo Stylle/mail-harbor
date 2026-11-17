@@ -1,6 +1,6 @@
 # Writable mount compatibility
 
-2026-11-17 local fix. No remote publication.
+Included in v0.2.1.
 
 Startup no longer chmods an existing DATA_DIR or database. The old unconditional chmod rejected writable NAS/bind mounts when the unprivileged process did not own the path. Existing host modes and ACLs are retained; new key/database files are created with restrictive modes. The service remains UID/GID10001, read-only root compatible and cap_drop ALL; no startup ownership helper or extra capabilities were added.
 
