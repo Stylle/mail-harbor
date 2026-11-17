@@ -7,10 +7,46 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 )
 
 var headerName = regexp.MustCompile("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 var webhookVariable = regexp.MustCompile(`\{\{\s*([a-zA-Z]+)\s*\}\}`)
+
+func notificationPayload(accountName string, m Message, job Job, body string) map[string]any {
+	if strings.TrimSpace(accountName) == "" {
+		accountName = "未命名邮箱"
+	}
+	payload := map[string]any{"event": "mail.received", "deliveryId": job.ID, "account": accountName, "mode": job.Mode, "receivedAt": m.Date}
+	if job.Mode != "notice" {
+		payload["subject"], payload["from"], payload["body"] = m.Subject, m.Sender, body
+	}
+	return payload
+}
+
+func webhookContent(vars map[string]any) string {
+	lines := []string{}
+	if sender, _ := vars["from"].(string); strings.TrimSpace(sender) != "" {
+		lines = append(lines, "发件人："+sender)
+	}
+	if account, _ := vars["account"].(string); strings.TrimSpace(account) != "" {
+		lines = append(lines, "接收邮箱："+account)
+	}
+	if stamp, _ := vars["receivedAt"].(float64); stamp > 0 {
+		lines = append(lines, "收信时间："+time.Unix(int64(stamp), 0).In(time.Local).Format("2006-01-02 15:04:05 -07:00"))
+	}
+	body, _ := vars["body"].(string)
+	if body == "" {
+		body, _ = vars["message"].(string)
+	}
+	if body == "" {
+		body = "新邮件已到达，请打开邮屿查看。"
+	}
+	if len(lines) == 0 {
+		return body
+	}
+	return strings.Join(lines, "\n") + "\n\n" + body
+}
 
 func validateHeaders(raw string) (map[string]string, error) {
 	if strings.TrimSpace(raw) == "" {
@@ -44,12 +80,16 @@ func renderWebhook(ch Channels, payload any) ([]byte, string, error) {
 	vars["fields"] = payload
 	vars["title"] = "新邮件通知"
 	vars["text"] = "你收到一封新邮件"
-	if v, ok := vars["subject"]; ok {
+	if vars["event"] == "mail.test" {
+		vars["title"] = "Webhook 连接测试"
+	}
+	if v, ok := vars["subject"]; ok && v != "" {
 		vars["title"] = v
 	}
 	if v, ok := vars["body"]; ok {
 		vars["text"] = v
 	}
+	vars["content"] = webhookContent(vars)
 	for _, k := range []string{"from", "subject", "body", "account", "event", "deliveryId"} {
 		if _, ok := vars[k]; !ok {
 			vars[k] = ""
@@ -74,9 +114,12 @@ func renderWebhook(ch Channels, payload any) ([]byte, string, error) {
 	contentType := "application/json"
 	if ch.WebhookBodyType == "text" {
 		contentType = "text/plain; charset=utf-8"
-		data = []byte(fmt.Sprint(vars["text"]))
+		data = []byte(fmt.Sprint(vars["content"]))
 	}
 	if ch.WebhookBody == "" {
+		if ch.WebhookBodyType != "text" {
+			data, e = json.Marshal(map[string]any{"title": vars["title"], "content": vars["content"]})
+		}
 		return data, contentType, nil
 	}
 	if len(ch.WebhookBody) > 64000 {

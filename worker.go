@@ -389,12 +389,9 @@ func (e *Engine) deliver(ctx context.Context) {
 				body = "新邮件已到达，请打开邮屿查看。"
 			}
 			a, _ := findAccount(st, m.AccountID)
-			payload := map[string]any{"event": "mail.received", "deliveryId": job.ID, "account": a.Name, "mode": job.Mode, "receivedAt": m.Date}
-			if job.Mode != "notice" {
-				payload["subject"] = m.Subject
-				payload["from"] = m.Sender
-				payload["body"] = truncate(body, 12000)
-			}
+			// Adapter text is bounded to 1MiB. Retain the complete allowed body,
+			// and identify the receiving mailbox by its display name only.
+			payload := notificationPayload(a.Name, m, job, body)
 			if err == nil {
 				if job.Channel == "telegram" {
 					if !st.Channels.TelegramEnabled || st.Channels.ChatID == 0 {

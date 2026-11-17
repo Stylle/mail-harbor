@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from "vue";
 import {
   PhEnvelopeSimple,
   PhPaperPlaneTilt,
@@ -313,10 +313,29 @@ const pages = [
 const pageTitle = computed(() =>
   t(pages.find((p) => p.id === page.value)?.name || title.value),
 );
+const settingsContent = ref<HTMLElement>();
+function syncLayoutViewport() {
+  // Browser page zoom changes innerWidth; the actual window width stays stable.
+  // Keep the chosen device layout while zooming, but respond to real resizing.
+  const width = window.outerWidth || window.innerWidth;
+  document.documentElement.dataset.mailLayout =
+    width <= 650 ? "phone" : width <= 900 ? "tablet" : "desktop";
+  document.documentElement.dataset.mailSize =
+    width >= 2100
+      ? "wide"
+      : width <= 1150
+        ? "small"
+        : width <= 1200
+          ? "medium"
+          : "normal";
+}
 function navigate(id: string, f = "all") {
   page.value = id;
   filter.value = f;
   navOpen.value = false;
+  nextTick(() => {
+    if (settingsContent.value) settingsContent.value.scrollTop = 0;
+  });
   selected.value = "";
   detailAbort?.abort();
   if (id === "channels")
@@ -660,7 +679,7 @@ async function changePassword() {
   });
 }
 const webhookVariables =
-  "变量：{{title}} {{text}} {{account}} {{from}} {{event}} {{fields}}。留空使用内置格式；推送规则决定哪些内容可用。";
+  "留空默认发送 title 和 content，内容按发件人、接收邮箱显示名称、时间和正文分行排版。变量：{{title}} {{content}} {{text}} {{account}} {{from}} {{event}} {{fields}}；推送规则决定正文范围。";
 const showReenroll = ref(false),
   composeOpen = ref(false),
   replyTo = ref<
@@ -687,6 +706,8 @@ async function enrollmentDone(result: any) {
   notice(t("双重验证已启用"));
 }
 onMounted(async () => {
+  syncLayoutViewport();
+  window.addEventListener("resize", syncLayoutViewport);
   try {
     const saved = localStorage.getItem("mail-harbor.theme");
     if (saved === "dark" || saved === "light") theme.value = saved;
@@ -707,6 +728,7 @@ onMounted(async () => {
   }, 10000);
 });
 onUnmounted(() => {
+  window.removeEventListener("resize", syncLayoutViewport);
   clearInterval(refreshTimer);
   clearTimeout(toastTimer);
   detailAbort?.abort();
@@ -1148,7 +1170,7 @@ onUnmounted(() => {
           </div>
         </section>
       </main>
-      <main v-else class="settings-content">
+      <main v-else ref="settingsContent" class="settings-content">
         <div class="page-heading">
           <h1>{{ pageTitle }}</h1>
           <p>
@@ -1450,9 +1472,17 @@ onUnmounted(() => {
               }}<textarea
                 v-model="channelForm.webhookBody"
                 rows="5"
-                placeholder='{"title":"{{title}}","message":"{{text}}"}'
+                :placeholder="'{\n  &quot;title&quot;: &quot;{{title}}&quot;,\n  &quot;content&quot;: &quot;{{content}}&quot;\n}'"
               ></textarea>
             </label>
+            <button
+              type="button"
+              class="text-button"
+              :disabled="working"
+              @click="channelForm.webhookBody = ''"
+            >
+              {{ t("使用默认格式") }}
+            </button>
             <p class="field-help">{{ t(webhookVariables) }}</p>
             <label
               >{{ t("签名密钥") }}<small>{{ t("可选") }}</small
@@ -1469,7 +1499,7 @@ onUnmounted(() => {
             <p class="field-help">
               {{
                 t(
-                  "固定发送 POST JSON。带有事件类型、投递 ID、邮箱名称和规则允许的内容；测试使用当前表单，不会保存配置。",
+                  "默认 JSON 使用 title 和 content；接收邮箱仅显示名称。测试使用当前表单，不会保存配置。",
                 )
               }}
             </p>

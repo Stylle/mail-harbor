@@ -1,6 +1,12 @@
 export const en: Record<string, string> = {
-"创建备份需12位以上，含大小写字母、数字和符号；恢复请填写原备份密码":"New backups require 12+ characters with uppercase, lowercase, a number and a symbol. Use the original password when restoring.",
-  "这封邮件没有可显示的正文。":"This message has no displayable text.",
+  使用默认格式: "Use default format",
+  "默认 JSON 使用 title 和 content；接收邮箱仅显示名称。测试使用当前表单，不会保存配置。":
+    "Default JSON uses title/content and the receiving account display name. Testing uses the current form without saving.",
+  "留空默认发送 title 和 content，内容按发件人、接收邮箱显示名称、时间和正文分行排版。变量：{{title}} {{content}} {{text}} {{account}} {{from}} {{event}} {{fields}}；推送规则决定正文范围。":
+    "Leave blank for title/content with sender, receiving account display name, time and body on separate lines. Variables: {{title}} {{content}} {{text}} {{account}} {{from}} {{event}} {{fields}}. Rules control the body scope.",
+  "创建备份需12位以上，含大小写字母、数字和符号；恢复请填写原备份密码":
+    "New backups require 12+ characters with uppercase, lowercase, a number and a symbol. Use the original password when restoring.",
+  "这封邮件没有可显示的正文。": "This message has no displayable text.",
   "任意名单项命中即匹配。黑名单优先，该通道不会被其他规则再次推送；尚未发送的匹配通知也会取消。":
     "Any listed item counts as a match. Blocklists take priority for the chosen channel and cancel matching notifications that have not been sent.",
   "163 邮箱": "163 Mail",
