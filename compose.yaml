@@ -1,31 +1,16 @@
 services:
   mail-harbor:
     build: .
-    image: stylle/mail-harbor:v0.2.3
+    image: stylle/mail-harbor:v0.2.4
     ports: ["28187:8080"]
-    # Change this mount once; the one-shot initializer uses the exact same mount.
-    volumes: &mail-data ["mail-harbor-data:/data"]
-    depends_on:
-      data-init:
-        condition: service_completed_successfully
+    volumes: ["mail-harbor-data:/data"]
     restart: unless-stopped
     read_only: true
     tmpfs: ["/tmp:rw,noexec,nosuid,size=32m,mode=1777"]
+    # Required only by the startup bootstrap. The API executes as UID10001
+    # with zero permitted/effective capabilities and no_new_privs.
     cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, SETUID, SETGID]
     security_opt: ["no-new-privileges:true"]
-  # Runs to completion before the mail service. No network, ports or API;
-  # adjusts ownership only for /data and its four known key/SQLite files.
-  # The mail service above retains cap_drop ALL and UID10001.
-  data-init:
-    image: stylle/mail-harbor:v0.2.3
-    user: "0:0"
-    entrypoint: ["/usr/local/bin/data-init"]
-    volumes: *mail-data
-    network_mode: none
-    read_only: true
-    cap_drop: [ALL]
-    cap_add: [CHOWN, DAC_OVERRIDE]
-    security_opt: ["no-new-privileges:true"]
-    restart: "no"
 volumes:
   mail-harbor-data:

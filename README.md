@@ -2,7 +2,7 @@
 
 个人自托管多邮箱收件与通知中心。Go + Vue + SQLite，参考 Apple Mail 的邮件导航、列表和阅读区布局，支持深浅色及手机/平板/桌面。
 
-当前版本 v0.2.3。源码：[GitHub](https://github.com/Stylle/mail-harbor)，镜像：[Docker Hub](https://hub.docker.com/r/stylle/mail-harbor)，支持 linux/amd64 和 linux/arm64。生产界面不包含示例邮件，真实邮箱和通知渠道需要部署者自行授权。
+当前版本 v0.2.4。源码：[GitHub](https://github.com/Stylle/mail-harbor)，镜像：[Docker Hub](https://hub.docker.com/r/stylle/mail-harbor)，支持 linux/amd64 和 linux/arm64。生产界面不包含示例邮件，真实邮箱和通知渠道需要部署者自行授权。
 
 ## 功能
 
@@ -27,14 +27,14 @@ docker compose up -d
 打开 `http://服务器:28187` 创建管理账户，强制绑定验证器并保存恢复码，然后添加邮箱。已有v0.1账户升级后先用原密码登录，再设置强密码和验证器；邮箱、同步进度和索引保留。首次初始化前不要把未配置实例暴露到公网；公网访问使用 HTTPS 反向代理。
 
 ```sh
-docker run -d --name mail-harbor --restart unless-stopped -p 28187:8080 -v mail-harbor-data:/data stylle/mail-harbor:v0.2.3
+docker run -d --name mail-harbor --restart unless-stopped -p 28187:8080 -v mail-harbor-data:/data stylle/mail-harbor:v0.2.4
 ```
 
-默认 Compose 自动创建数据卷，并先执行一次无网络的 `data-init` 任务，准备专用目录及已有密钥/SQLite文件的属主，然后退出。邮件服务始终以普通用户运行、无额外容器能力。无需手动设置700/600或在宿主机执行chown。自定义宿主机目录时，仅修改 `mail-harbor` 下的挂载，初始化任务通过YAML引用使用相同挂载；保留原来的数据位置。目录和文件的权限模式不被强制改写，新建密钥/数据库仍使用私有权限。NAS ACL、只读挂载或禁止属主调整的远程文件系统仍需实际允许容器读写，程序不能绕过宿主机限制。
+只需一个容器和一个数据卷，无 Redis、外部数据库或额外初始化服务。普通 Compose 和 `docker run` 均会在容器内部自动准备专用数据目录及固定密钥/SQLite文件的属主，再切换到 UID/GID10001 执行邮件服务；实际邮件进程没有有效/许可能力，并设置 no_new_privs。无需手动 chmod/chown，也不要求额外的 data-init 服务。已有文件内容及权限模式保留。
 
-只需一个长期运行的邮件服务和一个数据卷，无 Redis 或外部数据库。`data-init` 是启动前任务，显示退出码0代表准备完成，属于正常状态。容器 UID/GID10001。`/data` 的 `master.key` 和数据库必须同时保留，单个卷只供一个实例使用。
+默认使用 Docker 命名卷；也可直接绑定自己已有的专用目录，例如 `./data:/data`。升级保留原挂载及 master.key。宿主机若通过只读挂载、ACL或root-squash明确禁止访问，容器无法绕过该限制。自定义非root的 `user` 时跳过属主准备，已有目录需允许该用户读写。
 
-从源码构建可运行 `docker compose up -d --build`。更新前下载加密备份，并保留原数据卷；拉取新版后重新创建容器即可，不要删除数据卷。`latest` 跟随稳定版本，固定版本部署使用 `v0.2.3`。
+从源码构建可运行 `docker compose up -d --build`。更新前下载加密备份，并保留原数据卷；拉取新版后重新创建容器即可，不要删除数据卷。`latest` 跟随稳定版本，固定版本部署使用 `v0.2.4`。
 
 可选环境变量：`LISTEN_ADDR`（容器默认 `:8080`）、`DATA_DIR`（默认 `/data`）；`USER`、`PASSWORD` 仅首次初始化生效，密码至少12字符，并包含大写、小写、数字和符号。`TRUST_PROXY=1` 仅用于由可信代理覆盖 `X-Forwarded-Proto` 的 HTTPS 部署，启用 Secure Cookie。会话在进程内保存，重启服务需要重新登录，邮箱授权和同步进度仍保留。
 
@@ -93,10 +93,8 @@ MIT 开源，依赖许可见 [第三方说明](docs/THIRD-PARTY.md)。不向源�
 
 接口需要登录、强制2FA及写操作CSRF校验；登录和安全操作有限速。邮件文本通过参数化SQLite保存，不拼接SQL。正文仅显示文本和白名单协议链接，禁止执行HTML/JavaScript，不加载跟踪图片；外链使用noopener/noreferrer。请求头禁止CRLF和连接控制覆盖，Webhook禁止重定向及回环/链路本地目标。公网仍需HTTPS、及时更新和妥善保护主机/数据卷；这些措施不构成绝对安全保证，主机完全失陷仍可能暴露邮件和凭据。
 
-## 数据目录启动错误与升级至 v0.2.3
+## 数据目录启动错误与升级
 
-旧版将权限不足、密钥缺失和密钥损坏合并成同一条错误。新版分别提示读取/创建权限、路径类型、无效长度、数据库缺少配套密钥及密钥不匹配；错误不会包含密钥内容。
+v0.2.4 起，原来的单服务 Compose 可直接使用，不再要求添加 data-init 服务。若曾采用v0.2.3双服务配置，请换回单服务并保留原数据挂载；无需创建新卷。无需添加 user 字段，镜像启动器会自行准备后降权。若自定义了 cap_drop ALL，需保留仓库 Compose 中的启动准备能力，或明确使用具有数据访问权限的非root user。
 
-**已有绑定目录的部署，请使用本仓库新版 Compose，保留原挂载位置后执行 `docker compose pull && docker compose up -d`；只更新镜像不会自动给旧 Compose 加上初始化任务。** 空目录会自动创建密钥和数据库；已有数据会复用原密钥。不要删除 master.key，不要将绑定目录改为新的空卷，也不要使用 down -v。
-
-如果新日志明确指出已有数据库的 master.key 缺失、长度不对或不能解密，请恢复配套的完整备份。系统不会生成替代密钥覆盖旧数据；错误文件也会原样保留。单独把一个不存在的文件绑定到 `/data/master.key` 可能被Docker建成目录，应绑定整个专用数据目录。
+日志分别提示权限不足、路径类型、密钥长度、数据库缺少配套密钥和密钥不匹配，不含密钥内容。已有数据库缺失原密钥时不会生成替代密钥；实际丢失/损坏的密钥需要恢复配套完整备份。不要删除 master.key 或数据卷，也不要将原挂载改到新的空目录。

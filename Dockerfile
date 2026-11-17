@@ -37,9 +37,10 @@ RUN apk add --no-cache ca-certificates tzdata && addgroup -g 10001 app && adduse
 COPY --from=backend /mail-harbor /usr/local/bin/mail-harbor
 COPY --from=backend /data-init /usr/local/bin/data-init
 COPY LICENSE docs/licenses/ /usr/share/doc/mail-harbor/
-USER 10001:10001
+# Root is used only by the bounded bootstrap; it execs the API as UID10001,
+# with no_new_privs and zero effective/permitted capabilities.
 ENV LISTEN_ADDR=:8080 DATA_DIR=/data
 VOLUME ["/data"]
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s CMD wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1
-ENTRYPOINT ["/usr/local/bin/mail-harbor"]
+ENTRYPOINT ["/usr/local/bin/data-init", "--launch"]

@@ -1,7 +1,7 @@
 //go:build linux
 
-// One-shot, network-isolated Compose initialization. Never starts an API and
-// only adjusts ownership of the dedicated mount and four known SQLite/key files.
+// Container bootstrap. Prepares only the dedicated mount and four known files,
+// then drops privileges before executing the separate mail/API executable.
 package main
 
 import (
@@ -11,11 +11,20 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 )
 
 func prepare(dir string) error {
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	switch dir {
+	case "/", "/etc", "/usr", "/var", "/home", "/root", "/tmp", "/proc", "/sys", "/dev":
+		return errors.New("use a dedicated application data directory")
+	}
 	info, err := os.Lstat(dir)
 	if err != nil {
 		return err
@@ -102,10 +111,51 @@ func prepare(dir string) error {
 }
 
 func main() {
-	if os.Getuid() != 0 {
-		log.Fatal("data-init runs only as the isolated setup container")
+	if len(os.Args) > 1 && os.Args[1] == "--launch" {
+		if err := launch(os.Args[2:]); err != nil {
+			log.Fatal("Cannot start unprivileged mail service: ", err)
+		}
+		return
 	}
-	if err := prepare("/data"); err != nil {
+	if os.Getuid() != 0 {
+		log.Fatal("ownership preparation requires the container startup identity")
+	}
+	if err := prepare(dataDirectory()); err != nil {
 		log.Fatal("Cannot prepare dedicated /data mount: ", err)
 	}
+}
+
+func dataDirectory() string {
+	if dir := os.Getenv("DATA_DIR"); dir != "" {
+		return dir
+	}
+	return "/data"
+}
+
+func launch(args []string) error {
+	// Exec must inherit no_new_privs from the same OS thread. There is no mail
+	// listener, network request or user-controlled executable before this point.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	if os.Getuid() == 0 {
+		if err := prepare(dataDirectory()); err != nil {
+			return err
+		}
+		if err := syscall.Setgroups([]int{10001}); err != nil {
+			return fmt.Errorf("drop supplementary groups: %w", err)
+		}
+		if err := syscall.Setgid(10001); err != nil {
+			return fmt.Errorf("switch to mail group: %w", err)
+		}
+		if err := syscall.Setuid(10001); err != nil {
+			return fmt.Errorf("switch to mail user: %w", err)
+		}
+	}
+	// Kernel exec clears permitted/effective capabilities after switching UID.
+	// no_new_privs prevents any later exec from regaining privileges.
+	const prSetNoNewPrivs = 38
+	if _, _, errno := syscall.Syscall6(syscall.SYS_PRCTL, prSetNoNewPrivs, 1, 0, 0, 0, 0); errno != 0 {
+		return fmt.Errorf("lock unprivileged execution: %w", errno)
+	}
+	return syscall.Exec("/usr/local/bin/mail-harbor", append([]string{"mail-harbor"}, args...), os.Environ())
 }
