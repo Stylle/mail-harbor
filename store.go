@@ -198,9 +198,8 @@ func openStore(dir string) (*Store, error) {
 	if e := os.MkdirAll(dir, 0700); e != nil {
 		return nil, e
 	}
-	if e := os.Chmod(dir, 0700); e != nil {
-		return nil, e
-	}
+	// Existing bind mounts keep their host/NAS modes. Writable directories need
+	// not be owned by this process, and chmod may be unsupported by their ACLs.
 	keyPath := filepath.Join(dir, "master.key")
 	key, e := os.ReadFile(keyPath)
 	if os.IsNotExist(e) {
@@ -214,7 +213,15 @@ func openStore(dir string) (*Store, error) {
 	if e != nil || len(key) != 32 {
 		return nil, errors.New("master.key unavailable or invalid; restore complete data volume")
 	}
-	db, e := sql.Open("sqlite", filepath.Join(dir, "mail-harbor.db"))
+	dbPath := filepath.Join(dir, "mail-harbor.db")
+	file, e := os.OpenFile(dbPath, os.O_CREATE|os.O_RDWR, 0600)
+	if e != nil {
+		return nil, e
+	}
+	if e = file.Close(); e != nil {
+		return nil, e
+	}
+	db, e := sql.Open("sqlite", dbPath)
 	if e != nil {
 		return nil, e
 	}
@@ -226,9 +233,6 @@ func openStore(dir string) (*Store, error) {
 		}
 	}()
 	if _, e = db.Exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; CREATE TABLE IF NOT EXISTS state(id INTEGER PRIMARY KEY CHECK(id=1), payload BLOB NOT NULL)`); e != nil {
-		return nil, e
-	}
-	if e = os.Chmod(filepath.Join(dir, "mail-harbor.db"), 0600); e != nil {
 		return nil, e
 	}
 	s := &Store{db: db, key: key, state: State{Version: 2, Accounts: []Account{}, Messages: []Message{}, Rules: []Rule{}, Jobs: []Job{}, Events: []Event{}}}
