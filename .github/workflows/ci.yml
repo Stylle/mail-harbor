@@ -20,3 +20,4 @@ jobs:
           cache: false
       - run: go test -race ./... && go vet ./...
       - run: docker build -t mail-harbor:ci .
+      - run: python3 scripts/check-storage-container.py --image mail-harbor:ci

@@ -14,6 +14,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod,sharing=locked go mod download
 COPY *.go ./
+COPY cmd/ ./cmd/
 COPY web/.keep ./web/.keep
 RUN --mount=type=cache,target=/go/pkg/mod,sharing=locked --mount=type=cache,target=/root/.cache/go-build go test -race ./... && go vet ./...
 
@@ -26,12 +27,15 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod,sharing=locked go mod download
 COPY *.go ./
+COPY cmd/ ./cmd/
 COPY --from=frontend /src/web ./web
 RUN --mount=type=cache,target=/go/pkg/mod,sharing=locked --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /mail-harbor .
+RUN --mount=type=cache,target=/go/pkg/mod,sharing=locked --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /data-init ./cmd/data-init
 
 FROM alpine:3.23
 RUN apk add --no-cache ca-certificates tzdata && addgroup -g 10001 app && adduser -D -H -u 10001 -G app app && mkdir /data && chown app:app /data
 COPY --from=backend /mail-harbor /usr/local/bin/mail-harbor
+COPY --from=backend /data-init /usr/local/bin/data-init
 COPY LICENSE docs/licenses/ /usr/share/doc/mail-harbor/
 USER 10001:10001
 ENV LISTEN_ADDR=:8080 DATA_DIR=/data

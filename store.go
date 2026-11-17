@@ -19,7 +19,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const version = "0.2.1"
+const version = "0.2.2"
 const maxMessages = 5000
 
 type Account struct {
@@ -196,27 +196,21 @@ func passwordOK(hash, password string) bool {
 }
 func openStore(dir string) (*Store, error) {
 	if e := os.MkdirAll(dir, 0700); e != nil {
-		return nil, e
+		return nil, storageError("create data directory", e)
 	}
 	// Existing bind mounts keep their host/NAS modes. Writable directories need
 	// not be owned by this process, and chmod may be unsupported by their ACLs.
-	keyPath := filepath.Join(dir, "master.key")
-	key, e := os.ReadFile(keyPath)
-	if os.IsNotExist(e) {
-		key = make([]byte, 32)
-		_, e = rand.Read(key)
-		if e != nil {
-			return nil, e
-		}
-		e = os.WriteFile(keyPath, key, 0600)
-	}
-	if e != nil || len(key) != 32 {
-		return nil, errors.New("master.key unavailable or invalid; restore complete data volume")
-	}
-	dbPath := filepath.Join(dir, "mail-harbor.db")
-	file, e := os.OpenFile(dbPath, os.O_CREATE|os.O_RDWR, 0600)
+	key, e := loadMasterKey(dir)
 	if e != nil {
 		return nil, e
+	}
+	dbPath := filepath.Join(dir, "mail-harbor.db")
+	if e = regularDataPath(dbPath); e != nil {
+		return nil, e
+	}
+	file, e := os.OpenFile(dbPath, os.O_CREATE|os.O_RDWR, 0600)
+	if e != nil {
+		return nil, storageError("open database for writing", e)
 	}
 	if e = file.Close(); e != nil {
 		return nil, e
@@ -252,6 +246,14 @@ func openStore(dir string) (*Store, error) {
 	for _, a := range s.state.Accounts {
 		if _, e = s.decrypt(a.Secret); e != nil {
 			return nil, errors.New("account credentials cannot be decrypted; master.key does not match database")
+		}
+		if _, e = s.decrypt(a.Proxy); e != nil {
+			return nil, errors.New("proxy credentials cannot be decrypted; master.key does not match database")
+		}
+	}
+	for _, encrypted := range []string{s.state.TOTPSecret, s.state.Channels.Token, s.state.Channels.WebhookSecret, s.state.Channels.WebhookHeaders} {
+		if _, e = s.decrypt(encrypted); e != nil {
+			return nil, errors.New("security/notification settings cannot be decrypted; master.key does not match database; retain the original files and restore the matching complete backup")
 		}
 	}
 	if s.state.Version == 1 {
