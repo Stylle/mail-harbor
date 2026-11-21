@@ -19,7 +19,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const version = "0.2.5"
+const version = "0.2.6"
 const maxMessages = 5000
 
 type Account struct {
